@@ -14,3 +14,4 @@ frontend/dist/
 *.mov
 *.webm
 *.mkv
+PUBLIC_URL.txt
