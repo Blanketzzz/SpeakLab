@@ -30,8 +30,9 @@ app = FastAPI(title="SpeakLab", version="0.2.1")
 
 app.add_middleware(
     CORSMiddleware,
+    # GitHub Pages frontend calls this API from another origin.
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

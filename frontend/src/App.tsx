@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  API_BASE,
   CRITERION_LABELS,
   STAGE_LABEL,
   fetchJob,
@@ -20,6 +21,8 @@ export default function App() {
   const [dragOver, setDragOver] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
+  const [uploadPhase, setUploadPhase] = useState<"uploading" | "waiting" | null>(null);
   const [view, setView] = useState<View>("home");
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,8 +38,22 @@ export default function App() {
     setBusy(true);
     setError(null);
     setFile(f);
+    setUploadPct(0);
+    setUploadPhase("uploading");
+    const viaTunnel = location.hostname.includes("trycloudflare.com");
+    if (viaTunnel && f.size > 12 * 1024 * 1024) {
+      setError(
+        `Large file (${(f.size / 1024 / 1024).toFixed(0)} MB) over the public tunnel often hangs near the end. Prefer campus https://10.123.4.1/ — cancel and switch if this stalls.`
+      );
+    }
     try {
-      const jobId = await uploadVideo(f);
+      const jobId = await uploadVideo(
+        f,
+        (pct) => setUploadPct(pct),
+        (phase) => setUploadPhase(phase)
+      );
+      setUploadPct(null);
+      setUploadPhase(null);
       setView("working");
       setJob({
         id: jobId,
@@ -49,6 +66,8 @@ export default function App() {
       setView("error");
     } finally {
       setBusy(false);
+      setUploadPct(null);
+      setUploadPhase(null);
     }
   }, []);
 
@@ -118,8 +137,9 @@ export default function App() {
               <h2>Record or upload a speech. Get rubric-based feedback.</h2>
               <p className="lede">
                 Practice in-browser with your webcam, or drop an existing video.
-                The model watches the clip directly; frame/ASR fallback only runs
-                if video scoring times out.
+                This page is served over trusted HTTPS so the camera prompt can
+                appear. Scoring runs on the course server API
+                {API_BASE ? ` (${API_BASE})` : ""}.
               </p>
 
               <CameraRecorder
@@ -166,7 +186,13 @@ export default function App() {
 
               <div className="actions">
                 <button className="btn" disabled={!file || busy} onClick={start}>
-                  {busy ? "Uploading…" : "Run coaching pass"}
+                  {busy
+                    ? uploadPhase === "waiting"
+                      ? "Waiting for server…"
+                      : uploadPct != null
+                        ? `Uploading… ${uploadPct}%`
+                        : "Uploading…"
+                    : "Run coaching pass"}
                 </button>
                 {file && (
                   <button className="btn ghost" onClick={reset}>
@@ -323,7 +349,8 @@ export default function App() {
         )}
 
         <footer className="foot">
-          SpeakLab · course TA prototype · rubric editable in backend/rubric.py
+          SpeakLab · course TA prototype · rubric in backend/rubric.py
+          {API_BASE ? ` · API ${API_BASE}` : ""}
         </footer>
       </div>
     </div>

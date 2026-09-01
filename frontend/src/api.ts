@@ -83,16 +83,77 @@ export async function fetchRubric(): Promise<Rubric> {
   return res.json();
 }
 
-export async function uploadVideo(file: File): Promise<string> {
+export async function uploadVideo(
+  file: File,
+  onProgress?: (pct: number) => void,
+  onPhase?: (phase: "uploading" | "waiting") => void
+): Promise<string> {
   const body = new FormData();
   body.append("file", file);
-  const res = await fetch("/api/upload", { method: "POST", body });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || `Upload failed (${res.status})`);
-  }
-  const data = await res.json();
-  return data.job_id as string;
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const started = Date.now();
+    xhr.open("POST", "/api/upload");
+    xhr.timeout = 15 * 60 * 1000; // 15 min for slow tunnels
+
+    xhr.upload.onprogress = (ev) => {
+      if (!ev.lengthComputable) return;
+      // Keep 99 max until bytes leave the browser; 100 means "waiting for reply".
+      onProgress?.(Math.max(0, Math.min(99, Math.round((ev.loaded / ev.total) * 100))));
+    };
+
+    xhr.upload.onload = () => {
+      onProgress?.(100);
+      onPhase?.("waiting");
+    };
+
+    xhr.onload = () => {
+      onProgress?.(100);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data.job_id as string);
+        } catch {
+          reject(new Error("Upload succeeded but response was invalid."));
+        }
+        return;
+      }
+      let detail = `Upload failed (${xhr.status})`;
+      try {
+        detail = JSON.parse(xhr.responseText).detail || detail;
+      } catch {
+        /* ignore */
+      }
+      reject(new Error(detail));
+    };
+
+    xhr.onerror = () => {
+      const secs = Math.round((Date.now() - started) / 1000);
+      const viaTunnel = location.hostname.includes("trycloudflare.com");
+      reject(
+        new Error(
+          viaTunnel
+            ? `Upload network error after ${secs}s. The public tunnel is too slow/unreliable for large videos — use campus https://10.123.4.1/ or a shorter clip.`
+            : `Upload network error after ${secs}s. Check your connection and try again.`
+        )
+      );
+    };
+
+    xhr.ontimeout = () => {
+      const viaTunnel = location.hostname.includes("trycloudflare.com");
+      reject(
+        new Error(
+          viaTunnel
+            ? "Upload timed out on the public tunnel (often hangs near 99%). Use campus https://10.123.4.1/ for large files."
+            : "Upload timed out. Try a shorter/smaller video."
+        )
+      );
+    };
+
+    onPhase?.("uploading");
+    xhr.send(body);
+  });
 }
 
 export async function fetchJob(jobId: string): Promise<Job> {

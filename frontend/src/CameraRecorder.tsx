@@ -31,6 +31,29 @@ function formatElapsed(sec: number) {
   return `${m}:${s}`;
 }
 
+function cameraBlockReason(): string | null {
+  if (typeof window === "undefined") return null;
+  const secure =
+    window.isSecureContext ||
+    location.protocol === "https:" ||
+    location.hostname === "localhost" ||
+    location.hostname === "127.0.0.1";
+      if (!secure) {
+    return (
+      "Camera permission will not appear on plain HTTP. " +
+      "Use the GitHub Pages HTTPS link from your TA, or https://10.123.4.1/ " +
+      "(accept the certificate warning), or upload a file instead."
+    );
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return (
+      "This browser has no camera API (common in WeChat / some school browsers). " +
+      "Use Chrome or Edge, or upload a recorded file instead."
+    );
+  }
+  return null;
+}
+
 export default function CameraRecorder({ disabled, onRecorded, onError }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -42,6 +65,11 @@ export default function CameraRecorder({ disabled, onRecorded, onError }: Props)
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [busyCam, setBusyCam] = useState(false);
+  const [blockReason, setBlockReason] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBlockReason(cameraBlockReason());
+  }, []);
 
   const stopTracks = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -72,11 +100,14 @@ export default function CameraRecorder({ disabled, onRecorded, onError }: Props)
 
   const openCamera = async () => {
     if (disabled || busyCam) return;
+    const blocked = cameraBlockReason();
+    if (blocked) {
+      setBlockReason(blocked);
+      onError(blocked);
+      return;
+    }
     setBusyCam(true);
     try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error("Camera API not available in this browser.");
-      }
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: {
@@ -92,11 +123,25 @@ export default function CameraRecorder({ disabled, onRecorded, onError }: Props)
       }
       setLive(true);
       setElapsed(0);
+      setBlockReason(null);
     } catch (e) {
-      const msg =
-        e instanceof Error
-          ? e.message
-          : "Could not open camera/microphone. Check browser permissions.";
+      let msg = "Could not open camera/microphone.";
+      if (e instanceof DOMException) {
+        if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+          msg =
+            "Permission denied. Check the address-bar camera icon / site settings, " +
+            "allow camera + microphone, then reload. If you previously clicked Block, " +
+            "the browser will not ask again until you reset the permission.";
+        } else if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
+          msg = "No camera/microphone found on this computer.";
+        } else if (e.name === "NotReadableError") {
+          msg = "Camera is busy (another app may be using it). Close Zoom/Teams and retry.";
+        } else {
+          msg = `${e.name}: ${e.message}`;
+        }
+      } else if (e instanceof Error) {
+        msg = e.message;
+      }
       onError(msg);
       stopTracks();
       setLive(false);
@@ -171,6 +216,8 @@ export default function CameraRecorder({ disabled, onRecorded, onError }: Props)
     recorder.stop();
   };
 
+  const camDisabled = Boolean(disabled || busyCam || blockReason);
+
   return (
     <div className="recorder">
       <div className="recorder-head">
@@ -179,6 +226,8 @@ export default function CameraRecorder({ disabled, onRecorded, onError }: Props)
           uses your camera + mic · stop → auto upload & score
         </span>
       </div>
+
+      {blockReason && <p className="cam-warn">{blockReason}</p>}
 
       <div className={`preview ${live ? "on" : ""}`}>
         <video ref={videoRef} muted playsInline autoPlay />
@@ -192,7 +241,7 @@ export default function CameraRecorder({ disabled, onRecorded, onError }: Props)
 
       <div className="actions">
         {!live && (
-          <button className="btn" disabled={disabled || busyCam} onClick={openCamera}>
+          <button className="btn" disabled={camDisabled} onClick={openCamera}>
             {busyCam ? "Opening camera…" : "Open camera"}
           </button>
         )}
