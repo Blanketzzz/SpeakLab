@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+uploads/
+jobs/
+*.log
+.DS_Store
+frontend/node_modules/
+frontend/dist/
+.idea/
+.vscode/
+*.mp4
+*.mov
+*.webm
+*.mkv
