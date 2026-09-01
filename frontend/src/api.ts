@@ -77,8 +77,19 @@ export const CRITERION_LABELS: Record<string, string> = {
   engagement: "Audience Engagement",
 };
 
+
+/** Backend origin. Empty = same host (server deploy). Set VITE_API_BASE for GitHub Pages. */
+export const API_BASE = (
+  (import.meta.env.VITE_API_BASE as string | undefined) || ""
+).replace(/\/$/, "");
+
+export function apiUrl(path: string) {
+  if (!path.startsWith("/")) path = `/${path}`;
+  return `${API_BASE}${path}`;
+}
+
 export async function fetchRubric(): Promise<Rubric> {
-  const res = await fetch("/api/rubric");
+  const res = await fetch(apiUrl("/api/rubric"));
   if (!res.ok) throw new Error("Failed to load rubric");
   return res.json();
 }
@@ -94,7 +105,7 @@ export async function uploadVideo(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const started = Date.now();
-    xhr.open("POST", "/api/upload");
+    xhr.open("POST", apiUrl("/api/upload"));
     xhr.timeout = 15 * 60 * 1000; // 15 min for slow tunnels
 
     xhr.upload.onprogress = (ev) => {
@@ -157,7 +168,7 @@ export async function uploadVideo(
 }
 
 export async function fetchJob(jobId: string): Promise<Job> {
-  const res = await fetch(`/api/jobs/${jobId}`);
+  const res = await fetch(apiUrl(`/api/jobs/${jobId}`));
   if (!res.ok) throw new Error("Failed to load job");
   return res.json();
 }
