@@ -20,6 +20,7 @@ export default function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [fromCamera, setFromCamera] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [uploadPhase, setUploadPhase] = useState<"uploading" | "waiting" | null>(null);
@@ -68,12 +69,25 @@ export default function App() {
   const onFile = useCallback((f: File | null) => {
     if (!f) return;
     setFile(f);
+    setFromCamera(false);
     setError(null);
   }, []);
 
   const start = async () => {
     if (!file || busy) return;
     await runCoaching(file);
+  };
+
+  const downloadSpeech = () => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name || "speaklab-recording.webm";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   };
 
   useEffect(() => {
@@ -97,6 +111,7 @@ export default function App() {
 
   const reset = () => {
     setFile(null);
+    setFromCamera(false);
     setJob(null);
     setError(null);
     setView("home");
@@ -152,6 +167,7 @@ export default function App() {
                 disabled={busy}
                 onError={(message) => setError(message)}
                 onRecorded={(recorded) => {
+                  setFromCamera(true);
                   void runCoaching(recorded);
                 }}
               />
@@ -267,6 +283,11 @@ export default function App() {
                 <h2 className="err">Something broke</h2>
                 <p>{error}</p>
                 <div className="actions">
+                  {fromCamera && file && (
+                    <button className="btn ghost" type="button" onClick={downloadSpeech}>
+                      Download your recording
+                    </button>
+                  )}
                   <button className="btn" onClick={reset}>
                     Try again
                   </button>
@@ -345,6 +366,11 @@ export default function App() {
                 )}
 
                 <div className="actions" style={{ marginTop: "1.25rem" }}>
+                  {fromCamera && file && (
+                    <button className="btn ghost" type="button" onClick={downloadSpeech}>
+                      Download your recording
+                    </button>
+                  )}
                   <button className="btn" onClick={reset}>
                     Score another video
                   </button>

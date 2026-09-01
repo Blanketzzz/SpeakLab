@@ -223,7 +223,7 @@ export default function CameraRecorder({ disabled, onRecorded, onError }: Props)
       <div className="recorder-head">
         <strong>Record in browser</strong>
         <span className="hint">
-          uses your camera + mic · stop → auto upload & score
+          uses your camera + mic · stop → score · you can download the clip at the end
         </span>
       </div>
 
