@@ -261,21 +261,29 @@ def extract_audio(video_path: Path, out_wav: Path) -> Path:
 
 
 def transcribe_whisper(audio_path: Path, model: str = "base") -> str:
+    """Local Whisper CLI if installed; otherwise empty (cloud images skip ASR)."""
+    import shutil
+
+    if shutil.which("whisper") is None:
+        return ""
     out_dir = audio_path.parent
-    _run(
-        [
-            "whisper",
-            str(audio_path),
-            "--model",
-            model,
-            "--output_format",
-            "txt",
-            "--output_dir",
-            str(out_dir),
-            "--fp16",
-            "False",
-        ]
-    )
+    try:
+        _run(
+            [
+                "whisper",
+                str(audio_path),
+                "--model",
+                model,
+                "--output_format",
+                "txt",
+                "--output_dir",
+                str(out_dir),
+                "--fp16",
+                "False",
+            ]
+        )
+    except RuntimeError:
+        return ""
     txt = out_dir / f"{audio_path.stem}.txt"
     if not txt.exists():
         candidates = list(out_dir.glob("*.txt"))

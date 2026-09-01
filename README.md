@@ -1,47 +1,54 @@
 # SpeakLab
 
-Academic speech-coaching prototype for **The Art of Public Speaking** (HKUST(GZ) course TA tool).
+Academic speech-coaching app for **The Art of Public Speaking**.
 
-Students open a link (no login), **record with webcam** or upload a speech video, and get rubric-based feedback.
-The model watches the video directly; frame sampling + ASR only run if direct video scoring times out.
+Students open **one HTTPS link** (no login): record or upload → rubric feedback.
+The model watches the video; frames + ASR only if direct scoring fails.
 
-## Quick start (server)
+## Student URL (recommended)
+
+Deploy the whole app (UI + API) to a free host with real HTTPS — same origin, no IP, no Cloudflare tunnel.
+
+### One-click Render (free)
+
+1. Open: https://render.com/deploy?repo=https://github.com/Blanketzzz/SpeakLab  
+2. Create a free Render account (GitHub login is fine).  
+3. Set secret **`KELAI_API_KEY`**, then deploy.  
+4. Share the URL Render gives you, e.g. `https://speaklab-xxxx.onrender.com`
+
+Cold start: free tier may sleep after idle; first open can take ~30–60s.
+
+### Docker (any host)
 
 ```bash
-cp .env.example .env   # set KELAI_API_KEY / KELAI_BASE_URL / KELAI_MODEL
+docker build -t speaklab .
+docker run --rm -p 7860:7860 \
+  -e KELAI_API_KEY=... \
+  -e KELAI_BASE_URL=https://kelaiapi.cc/v1 \
+  -e KELAI_MODEL=gemini-2.5-flash-lite \
+  speaklab
+```
+
+## Local / campus server
+
+```bash
+cp .env.example .env   # set KELAI_API_KEY
 chmod +x start.sh
 ./start.sh
 ```
 
-Open `http://<host>:8787`
-
-Dev frontend (hot reload):
-
-```bash
-PYTHONPATH=. .venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8787 --reload
-cd frontend && npm install && npm run dev
-```
+Open `http://<host>:8787` (camera needs HTTPS).
 
 ## Environment
 
 | Variable | Meaning |
 |----------|---------|
-| `KELAI_API_KEY` | API token (never commit) |
+| `KELAI_API_KEY` | API token (**never commit**) |
 | `KELAI_BASE_URL` | default `https://kelaiapi.cc/v1` |
 | `KELAI_MODEL` | default `gemini-2.5-flash-lite` |
-| `PORT` | default `8787` |
+| `PORT` | `8787` local / `7860` in Docker |
+| `MAX_UPLOAD_MB` | default `120` on cloud images |
 
 ## Rubric
 
-Edit `backend/rubric.py`. The homepage loads it from `/api/rubric`.
-
-## Sharing with students
-
-GitHub hosts **code**. Students need a **running server URL** (this app has a backend + API key).
-
-Options:
-1. Run on a lab/server and share `http://<public-host>:8787`
-2. Use a tunnel (Cloudflare Tunnel / ngrok) pointed at local `:8787`
-3. Deploy to a host that supports long uploads + env secrets
-
-Do **not** put `KELAI_API_KEY` in the frontend or a public repo.
+Edit `backend/rubric.py`. Homepage loads `/api/rubric`.

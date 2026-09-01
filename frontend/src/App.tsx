@@ -40,12 +40,6 @@ export default function App() {
     setFile(f);
     setUploadPct(0);
     setUploadPhase("uploading");
-    const viaTunnel = location.hostname.includes("trycloudflare.com");
-    if (viaTunnel && f.size > 12 * 1024 * 1024) {
-      setError(
-        `Large file (${(f.size / 1024 / 1024).toFixed(0)} MB) over the public tunnel often hangs near the end. Prefer campus https://10.123.4.1/ — cancel and switch if this stalls.`
-      );
-    }
     try {
       const jobId = await uploadVideo(
         f,
@@ -137,10 +131,22 @@ export default function App() {
               <h2>Record or upload a speech. Get rubric-based feedback.</h2>
               <p className="lede">
                 Practice in-browser with your webcam, or drop an existing video.
-                This page is served over trusted HTTPS so the camera prompt can
-                appear. Scoring runs on the course server API
-                {API_BASE ? ` (${API_BASE})` : ""}.
+                Videos are uploaded to the course server, which then calls the AI
+                API — the model is never called from your browser.
+                {API_BASE
+                  ? " You are on GitHub Pages; large uploads may be slow because the API is reached via a public relay. Prefer the campus server link for class work."
+                  : " You are on the course server — uploads stay on campus LAN."}
               </p>
+              {API_BASE && (
+                <p className="cam-warn" style={{ marginTop: "0.85rem" }}>
+                  Class / large videos: open{" "}
+                  <a href="https://10.123.4.1/" style={{ color: "inherit", fontWeight: 700 }}>
+                    https://10.123.4.1/
+                  </a>{" "}
+                  (accept the certificate warning once). That path is{" "}
+                  browser → campus server → AI, with no Cloudflare hop.
+                </p>
+              )}
 
               <CameraRecorder
                 disabled={busy}
