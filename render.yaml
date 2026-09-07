@@ -3,6 +3,8 @@ services:
     name: speaklab
     runtime: docker
     plan: free
+    branch: main
+    autoDeployTrigger: commit
     healthCheckPath: /api/health
     envVars:
       - key: KELAI_API_KEY
