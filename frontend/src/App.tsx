@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   API_BASE,
-  CRITERION_LABELS,
   STAGE_LABEL,
+  criterionLabel,
   fetchJob,
   fetchRubric,
+  fetchRubricList,
   formatScore,
   stagesForJob,
   uploadVideo,
   usableTranscript,
   type Job,
   type Rubric,
+  type RubricSummary,
 } from "./api";
 import CameraRecorder from "./CameraRecorder";
 
@@ -27,44 +29,82 @@ export default function App() {
   const [view, setView] = useState<View>("home");
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rubricList, setRubricList] = useState<RubricSummary[]>([]);
+  const [rubricId, setRubricId] = useState("informative");
   const [rubric, setRubric] = useState<Rubric | null>(null);
+  const [customize, setCustomize] = useState(false);
+  const [customJson, setCustomJson] = useState("");
 
   useEffect(() => {
-    fetchRubric()
-      .then(setRubric)
-      .catch(() => setRubric(null));
+    fetchRubricList()
+      .then((data) => {
+        setRubricList(data.rubrics);
+        setRubricId(data.default || "informative");
+      })
+      .catch(() => setRubricList([]));
   }, []);
 
-  const runCoaching = useCallback(async (f: File) => {
-    setBusy(true);
-    setError(null);
-    setFile(f);
-    setUploadPct(0);
-    setUploadPhase("uploading");
-    try {
-      const jobId = await uploadVideo(
-        f,
-        (pct) => setUploadPct(pct),
-        (phase) => setUploadPhase(phase)
-      );
-      setUploadPct(null);
-      setUploadPhase(null);
-      setView("working");
-      setJob({
-        id: jobId,
-        status: "queued",
-        stage: "queued",
-        filename: f.name,
+  useEffect(() => {
+    let cancelled = false;
+    fetchRubric(rubricId)
+      .then((r) => {
+        if (cancelled) return;
+        setRubric(r);
+        setCustomJson(JSON.stringify(r, null, 2));
+      })
+      .catch(() => {
+        if (!cancelled) setRubric(null);
       });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
-      setView("error");
-    } finally {
-      setBusy(false);
-      setUploadPct(null);
-      setUploadPhase(null);
-    }
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [rubricId]);
+
+  const runCoaching = useCallback(
+    async (f: File) => {
+      setBusy(true);
+      setError(null);
+      setFile(f);
+      setUploadPct(0);
+      setUploadPhase("uploading");
+      try {
+        let rubricJson: string | undefined;
+        if (customize) {
+          try {
+            JSON.parse(customJson);
+          } catch {
+            throw new Error("Custom rubric JSON is invalid. Fix it or turn off customize.");
+          }
+          rubricJson = customJson;
+        }
+        const jobId = await uploadVideo(f, {
+          rubricId,
+          rubricJson,
+          onProgress: (pct) => setUploadPct(pct),
+          onPhase: (phase) => setUploadPhase(phase),
+        });
+        setUploadPct(null);
+        setUploadPhase(null);
+        setView("working");
+        setJob({
+          id: jobId,
+          status: "queued",
+          stage: "queued",
+          filename: f.name,
+          rubric_id: rubricId,
+          rubric_title: rubric?.title,
+        });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Upload failed");
+        setView("error");
+      } finally {
+        setBusy(false);
+        setUploadPct(null);
+        setUploadPhase(null);
+      }
+    },
+    [customize, customJson, rubricId, rubric?.title]
+  );
 
   const onFile = useCallback((f: File | null) => {
     if (!f) return;
@@ -119,6 +159,10 @@ export default function App() {
   };
 
   const result = job?.result;
+  const scaleMax =
+    Number(result?._meta?.scale_max) ||
+    rubric?.scale?.max ||
+    20;
 
   return (
     <div className="app">
@@ -141,27 +185,87 @@ export default function App() {
                 <h1 className="brand">
                   SpeakLab<span className="cursor" aria-hidden />
                 </h1>
-                <span className="tag">academic speech coach · v0.2</span>
+                <span className="tag">academic speech coach · v0.3</span>
               </div>
-              <h2>Record or upload a speech. Get rubric-based feedback.</h2>
+              <h2>Pick a rubric, then record or upload.</h2>
               <p className="lede">
-                Practice in-browser with your webcam, or drop an existing video.
-                Videos are uploaded to the course server, which then calls the AI
-                API — the model is never called from your browser.
-                {API_BASE
-                  ? " You are on GitHub Pages; large uploads may be slow because the API is reached via a public relay. Prefer the campus server link for class work."
-                  : " You are on the course server — uploads stay on campus LAN."}
+                Choose the syllabus rubric that matches your assignment (Informative vs
+                Persuasive weight different skills). Optional: customize the JSON before
+                scoring. Videos go to the course server; the model is never called from your
+                browser.
+                {API_BASE ? ` API: ${API_BASE}` : ""}
               </p>
-              {API_BASE && (
-                <p className="cam-warn" style={{ marginTop: "0.85rem" }}>
-                  Class / large videos: open{" "}
-                  <a href="https://10.123.4.1/" style={{ color: "inherit", fontWeight: 700 }}>
-                    https://10.123.4.1/
-                  </a>{" "}
-                  (accept the certificate warning once). That path is{" "}
-                  browser → campus server → AI, with no Cloudflare hop.
-                </p>
-              )}
+
+              <div className="rubric-picker">
+                <div className="recorder-head">
+                  <strong>Scoring rubric</strong>
+                  <span className="hint">from UCUG 1504 syllabus · change before you start</span>
+                </div>
+                <div className="rubric-cards">
+                  {(rubricList.length
+                    ? rubricList
+                    : [
+                        {
+                          id: "informative",
+                          title: "Presentation 1 · Informative Speech",
+                          description: "Syllabus informative weighting (/20).",
+                          total_points: 20,
+                          criterion_count: 11,
+                        },
+                        {
+                          id: "persuasive",
+                          title: "Presentation 2 · Persuasive Speech",
+                          description: "Heavier eye contact & pathos (/20).",
+                          total_points: 20,
+                          criterion_count: 11,
+                        },
+                        {
+                          id: "generic",
+                          title: "General practice (1–5)",
+                          description: "Lightweight practice scale.",
+                          total_points: 5,
+                          criterion_count: 6,
+                        },
+                      ]
+                  ).map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className={`rubric-card ${rubricId === r.id ? "on" : ""}`}
+                      disabled={busy}
+                      onClick={() => {
+                        setRubricId(r.id);
+                        setCustomize(false);
+                      }}
+                    >
+                      <strong>{r.title}</strong>
+                      <span>
+                        {r.criterion_count} criteria · max {r.total_points}
+                      </span>
+                      <p>{r.description}</p>
+                    </button>
+                  ))}
+                </div>
+                <label className="custom-toggle">
+                  <input
+                    type="checkbox"
+                    checked={customize}
+                    disabled={busy}
+                    onChange={(e) => setCustomize(e.target.checked)}
+                  />
+                  Customize this rubric (edit JSON before upload)
+                </label>
+                {customize && (
+                  <textarea
+                    className="custom-json"
+                    value={customJson}
+                    disabled={busy}
+                    onChange={(e) => setCustomJson(e.target.value)}
+                    rows={14}
+                    spellCheck={false}
+                  />
+                )}
+              </div>
 
               <CameraRecorder
                 disabled={busy}
@@ -196,7 +300,7 @@ export default function App() {
                 }}
               >
                 <strong>{file ? file.name : "Drop / choose your speech video"}</strong>
-                <p>mp4 · mov · webm · ideally under ~10 minutes</p>
+                <p>mp4 · mov · webm · ideally 4–5 minutes (assignment length)</p>
                 <input
                   ref={inputRef}
                   className="hidden"
@@ -226,7 +330,7 @@ export default function App() {
             </section>
 
             <section className="section" id="rubric">
-              <h3>Scoring rubric</h3>
+              <h3>{rubric?.title || "Scoring rubric"}</h3>
               <p className="hint">
                 {rubric
                   ? `${rubric.course} · ${rubric.scale.label} · ${rubric.version}`
@@ -235,7 +339,11 @@ export default function App() {
               <div className="rubric-list">
                 {(rubric?.criteria || []).map((c) => (
                   <div className="rubric-item" key={c.id}>
-                    <div className="weight">{Math.round(c.weight * 100)}%</div>
+                    <div className="weight">
+                      {c.max_points != null
+                        ? `${c.max_points} pts`
+                        : `${Math.round((c.weight || 0) * 100)}%`}
+                    </div>
                     <div>
                       <h4>{c.name}</h4>
                       <ul>
@@ -258,6 +366,7 @@ export default function App() {
                 <h2>Working on it…</h2>
                 <p className="hint">
                   {job.filename}
+                  {job.rubric_title ? ` · ${job.rubric_title}` : ""}
                   {job.duration_sec ? ` · ${job.duration_sec.toFixed(0)}s` : ""}
                   {job.path ? ` · path: ${job.path}` : ""}
                 </p>
@@ -299,16 +408,14 @@ export default function App() {
               <section className="section result">
                 <h2>Coaching report</h2>
                 <p className="hint">
+                  rubric: {String(result._meta?.rubric_title || job?.rubric_title || "—")} ·
                   scored from: {String(result._meta?.mode || "—")} · model:{" "}
                   {String(result._meta?.model || "—")}
-                  {result._meta?.mode === "direct_video"
-                    ? " · frames/ASR were not used for this score"
-                    : " · used frames+ASR fallback"}
                 </p>
                 <div className="score-row">
                   <div className="big-score">
                     {formatScore(result.overall_score)}
-                    <small>/ 5 overall</small>
+                    <small>/ {scaleMax} overall</small>
                   </div>
                   <p>{result.summary}</p>
                 </div>
@@ -334,17 +441,27 @@ export default function App() {
 
                 <h3 style={{ marginTop: "1.25rem" }}>By criterion</h3>
                 <div className="criteria">
-                  {(result.criteria || []).map((c) => (
-                    <div className="row" key={c.id}>
-                      <div className="n">{formatScore(c.score)}</div>
-                      <div>
-                        <strong>{CRITERION_LABELS[c.id] || c.id}</strong>
-                        <p style={{ margin: "0.25rem 0 0", color: "var(--ink-soft)" }}>
-                          {c.feedback}
-                        </p>
+                  {(result.criteria || []).map((c) => {
+                    const maxPts = rubric?.criteria?.find((x) => x.id === c.id)?.max_points;
+                    return (
+                      <div className="row" key={c.id}>
+                        <div className="n">
+                          {formatScore(c.score)}
+                          {maxPts != null ? (
+                            <small style={{ display: "block", fontSize: "0.65rem" }}>
+                              / {maxPts}
+                            </small>
+                          ) : null}
+                        </div>
+                        <div>
+                          <strong>{criterionLabel(rubric, c.id)}</strong>
+                          <p style={{ margin: "0.25rem 0 0", color: "var(--ink-soft)" }}>
+                            {c.feedback}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {!!result.coach_checklist?.length && (
@@ -381,8 +498,7 @@ export default function App() {
         )}
 
         <footer className="foot">
-          SpeakLab · course TA prototype · rubric in backend/rubric.py
-          {API_BASE ? ` · API ${API_BASE}` : ""}
+          SpeakLab · UCUG 1504 TA prototype · choose Informative / Persuasive / practice
         </footer>
       </div>
     </div>

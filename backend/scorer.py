@@ -10,33 +10,18 @@ from typing import Any
 import httpx
 
 from .config import Settings
-from .rubric import RUBRIC, rubric_prompt_block
+from .rubric import rubric_prompt_block, schema_hint_for
 
 
 SYSTEM_PROMPT = """You are an expert public-speaking coach and course TA for the undergraduate class
-"The Art of Public Speaking". Score student speeches with the provided academic rubric.
+"The Art of Public Speaking" (UCUG 1504). Score student speeches with the provided academic rubric.
 
 Prefer evidence from the attached media (video and/or frames + transcript).
 Be specific, constructive, and actionable. Do not invent unsupported quotes.
+Respect each criterion's max_points — never score above that criterion's maximum.
+overall_score must be the sum of the criterion scores.
 
 Respond with ONLY valid JSON matching the schema. No markdown fences."""
-
-
-SCHEMA_HINT = {
-    "overall_score": "number 1-5 (one decimal ok)",
-    "summary": "2-4 sentence overall coaching summary in English",
-    "strengths": ["3 concrete strengths"],
-    "improvements": ["3 prioritized improvements"],
-    "criteria": [
-        {
-            "id": "structure|content|language|delivery_voice|delivery_body|engagement",
-            "score": "1-5",
-            "feedback": "specific feedback in English",
-            "evidence": ["short evidence notes"],
-        }
-    ],
-    "coach_checklist": ["5 short next-practice drills"],
-}
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -53,7 +38,13 @@ def _extract_json(text: str) -> dict[str, Any]:
         return json.loads(match.group(0))
 
 
-def _normalize(parsed: dict[str, Any], *, mode: str, extra: dict[str, Any]) -> dict[str, Any]:
+def _normalize(
+    parsed: dict[str, Any],
+    *,
+    mode: str,
+    rubric: dict[str, Any],
+    extra: dict[str, Any],
+) -> dict[str, Any]:
     try:
         parsed["overall_score"] = float(parsed.get("overall_score"))
     except (TypeError, ValueError):
@@ -65,7 +56,10 @@ def _normalize(parsed: dict[str, Any], *, mode: str, extra: dict[str, Any]) -> d
             pass
     parsed["_meta"] = {
         "model": extra.get("model"),
-        "rubric_version": RUBRIC["version"],
+        "rubric_id": rubric.get("id"),
+        "rubric_version": rubric.get("version"),
+        "rubric_title": rubric.get("title"),
+        "scale_max": rubric.get("scale", {}).get("max"),
         "mode": mode,
         **{k: v for k, v in extra.items() if k != "model"},
     }
@@ -165,11 +159,12 @@ def _score_messages(
     *,
     mode: str,
     model: str,
+    rubric: dict[str, Any],
     extra: dict[str, Any],
 ) -> dict[str, Any]:
     raw = chat_completions(settings, messages=messages, model=model)
     parsed = _extract_json(raw)
-    return _normalize(parsed, mode=mode, extra={"model": model, **extra})
+    return _normalize(parsed, mode=mode, rubric=rubric, extra={"model": model, **extra})
 
 
 def score_speech_video(
@@ -179,9 +174,11 @@ def score_speech_video(
     transcript: str,
     video_path: Path,
     filename: str,
+    rubric: dict[str, Any],
     model: str | None = None,
 ) -> dict[str, Any]:
     use_model = model or settings.kelai_model
+    hint = schema_hint_for(rubric)
     text = f"""Score this student speech VIDEO for an academic course.
 
 Original filename: {filename}
@@ -189,7 +186,7 @@ Approx original duration (seconds): {duration_sec:.1f}
 Note: the attached clip may be a compressed / sampled version (opening+middle+closing).
 
 RUBRIC:
-{rubric_prompt_block()}
+{rubric_prompt_block(rubric)}
 
 OPTIONAL ASR TRANSCRIPT (helper only):
 \"\"\"
@@ -197,10 +194,10 @@ OPTIONAL ASR TRANSCRIPT (helper only):
 \"\"\"
 
 Analyze visuals and audio. Return JSON:
-{json.dumps(SCHEMA_HINT, ensure_ascii=False, indent=2)}
+{json.dumps(hint, ensure_ascii=False, indent=2)}
 
 Include ALL rubric criterion ids exactly once.
-overall_score should reflect criterion scores using rubric weights.
+overall_score MUST equal the sum of criterion scores (max {rubric['scale']['max']}).
 """
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -217,6 +214,7 @@ overall_score should reflect criterion scores using rubric weights.
         messages,
         mode="direct_video",
         model=use_model,
+        rubric=rubric,
         extra={
             "analysis_video_bytes": video_path.stat().st_size,
             "transcript_chars": len(transcript or ""),
@@ -231,9 +229,11 @@ def score_speech_frames(
     transcript: str,
     frame_paths: list[Path],
     filename: str,
+    rubric: dict[str, Any],
     model: str | None = None,
 ) -> dict[str, Any]:
     use_model = model or "gemini-2.5-flash-lite"
+    hint = schema_hint_for(rubric)
     text = f"""Score this student speech using sampled frames + transcript.
 (Fallback mode used because direct video analysis timed out.)
 
@@ -241,7 +241,7 @@ Filename: {filename}
 Approx duration (seconds): {duration_sec:.1f}
 
 RUBRIC:
-{rubric_prompt_block()}
+{rubric_prompt_block(rubric)}
 
 TRANSCRIPT:
 \"\"\"
@@ -249,9 +249,10 @@ TRANSCRIPT:
 \"\"\"
 
 Frames are in time order. Return JSON:
-{json.dumps(SCHEMA_HINT, ensure_ascii=False, indent=2)}
+{json.dumps(hint, ensure_ascii=False, indent=2)}
 
 Include ALL rubric criterion ids exactly once.
+overall_score MUST equal the sum of criterion scores (max {rubric['scale']['max']}).
 """
     content: list[dict[str, Any]] = [{"type": "text", "text": text}]
     content.extend(_frame_parts(frame_paths))
@@ -264,6 +265,7 @@ Include ALL rubric criterion ids exactly once.
         messages,
         mode="frames_plus_transcript",
         model=use_model,
+        rubric=rubric,
         extra={
             "frame_count": len(frame_paths),
             "transcript_chars": len(transcript or ""),
@@ -279,8 +281,8 @@ def score_with_fallbacks(
     video_path: Path,
     frame_paths: list[Path],
     filename: str,
+    rubric: dict[str, Any],
 ) -> dict[str, Any]:
-    # Prefer the fast model first — Kelai/Cloudflare often 504s on long Pro video jobs.
     errors: list[str] = []
     light_frames = frame_paths[:6]
 
@@ -292,6 +294,7 @@ def score_with_fallbacks(
                 transcript=transcript,
                 video_path=video_path,
                 filename=filename,
+                rubric=rubric,
                 model=model,
             )
         except Exception as exc:  # noqa: BLE001
@@ -304,6 +307,7 @@ def score_with_fallbacks(
             transcript=transcript,
             frame_paths=light_frames,
             filename=filename,
+            rubric=rubric,
             model="gemini-2.5-flash-lite",
         )
     except Exception as exc:  # noqa: BLE001

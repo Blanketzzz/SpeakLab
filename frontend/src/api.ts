@@ -23,20 +23,40 @@ export type Job = {
   filename: string;
   duration_sec?: number;
   transcript?: string;
+  rubric_id?: string;
+  rubric_title?: string;
   result?: ScoreResult;
   error?: string;
 };
 
+export type RubricCriterion = {
+  id: string;
+  name: string;
+  max_points?: number;
+  weight: number;
+  look_for: string[];
+};
+
 export type Rubric = {
+  id?: string;
   version: string;
   course: string;
+  title?: string;
+  assignment?: string;
+  description?: string;
   scale: { min: number; max: number; label: string };
-  criteria: Array<{
-    id: string;
-    name: string;
-    weight: number;
-    look_for: string[];
-  }>;
+  criteria: RubricCriterion[];
+};
+
+export type RubricSummary = {
+  id: string;
+  title: string;
+  version: string;
+  assignment?: string;
+  description: string;
+  scale: { min: number; max: number; label: string };
+  criterion_count: number;
+  total_points: number;
 };
 
 /** Primary path stages (always). Fallback stages appear only if video scoring fails. */
@@ -68,16 +88,6 @@ export const STAGE_LABEL: Record<string, string> = {
   error: "error",
 };
 
-export const CRITERION_LABELS: Record<string, string> = {
-  structure: "Structure & Organization",
-  content: "Content & Argument",
-  language: "Language & Clarity",
-  delivery_voice: "Voice & Timing",
-  delivery_body: "Presence & Body Language",
-  engagement: "Audience Engagement",
-};
-
-
 /** Backend origin. Empty = same host (server deploy). Set VITE_API_BASE for GitHub Pages. */
 export const API_BASE = (
   (import.meta.env.VITE_API_BASE as string | undefined) || ""
@@ -88,39 +98,53 @@ export function apiUrl(path: string) {
   return `${API_BASE}${path}`;
 }
 
-export async function fetchRubric(): Promise<Rubric> {
-  const res = await fetch(apiUrl("/api/rubric"));
+export async function fetchRubricList(): Promise<{
+  default: string;
+  rubrics: RubricSummary[];
+}> {
+  const res = await fetch(apiUrl("/api/rubrics"));
+  if (!res.ok) throw new Error("Failed to load rubrics");
+  return res.json();
+}
+
+export async function fetchRubric(rubricId?: string): Promise<Rubric> {
+  const path = rubricId ? `/api/rubric/${encodeURIComponent(rubricId)}` : "/api/rubric";
+  const res = await fetch(apiUrl(path));
   if (!res.ok) throw new Error("Failed to load rubric");
   return res.json();
 }
 
-export async function uploadVideo(
-  file: File,
-  onProgress?: (pct: number) => void,
-  onPhase?: (phase: "uploading" | "waiting") => void
-): Promise<string> {
+export type UploadOpts = {
+  rubricId?: string;
+  rubricJson?: string;
+  onProgress?: (pct: number) => void;
+  onPhase?: (phase: "uploading" | "waiting") => void;
+};
+
+export async function uploadVideo(file: File, opts: UploadOpts = {}): Promise<string> {
   const body = new FormData();
   body.append("file", file);
+  body.append("rubric_id", opts.rubricId || "informative");
+  if (opts.rubricJson) body.append("rubric_json", opts.rubricJson);
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const started = Date.now();
     xhr.open("POST", apiUrl("/api/upload"));
-    xhr.timeout = 15 * 60 * 1000; // 15 min for slow tunnels
+    xhr.timeout = 15 * 60 * 1000;
 
     xhr.upload.onprogress = (ev) => {
       if (!ev.lengthComputable) return;
-      // Keep 99 max until bytes leave the browser; 100 means "waiting for reply".
-      onProgress?.(Math.max(0, Math.min(99, Math.round((ev.loaded / ev.total) * 100))));
+      opts.onProgress?.(Math.max(0, Math.min(99, Math.round((ev.loaded / ev.total) * 100))));
     };
 
     xhr.upload.onload = () => {
-      onProgress?.(100);
-      onPhase?.("waiting");
+      opts.onProgress?.(100);
+      opts.onPhase?.("waiting");
     };
 
     xhr.onload = () => {
-      onProgress?.(100);
+      opts.onProgress?.(100);
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const data = JSON.parse(xhr.responseText);
@@ -141,28 +165,14 @@ export async function uploadVideo(
 
     xhr.onerror = () => {
       const secs = Math.round((Date.now() - started) / 1000);
-      const viaTunnel = location.hostname.includes("trycloudflare.com");
-      reject(
-        new Error(
-          viaTunnel
-            ? `Upload network error after ${secs}s. The public tunnel is too slow/unreliable for large videos — use campus https://10.123.4.1/ or a shorter clip.`
-            : `Upload network error after ${secs}s. Check your connection and try again.`
-        )
-      );
+      reject(new Error(`Upload network error after ${secs}s. Check your connection and try again.`));
     };
 
     xhr.ontimeout = () => {
-      const viaTunnel = location.hostname.includes("trycloudflare.com");
-      reject(
-        new Error(
-          viaTunnel
-            ? "Upload timed out on the public tunnel (often hangs near 99%). Use campus https://10.123.4.1/ for large files."
-            : "Upload timed out. Try a shorter/smaller video."
-        )
-      );
+      reject(new Error("Upload timed out. Try a shorter/smaller video."));
     };
 
-    onPhase?.("uploading");
+    opts.onPhase?.("uploading");
     xhr.send(body);
   });
 }
@@ -177,7 +187,7 @@ export function formatScore(n: number | string | undefined) {
   if (n == null || n === "") return "—";
   const v = Number(n);
   if (Number.isNaN(v)) return "—";
-  return v.toFixed(1);
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
 }
 
 /** Treat Whisper noise like "." lines as empty. */
@@ -200,4 +210,9 @@ export function stagesForJob(job: Job): string[] {
     return [...PRIMARY_STAGES.slice(0, 4), ...FALLBACK_STAGES, "done"];
   }
   return [...PRIMARY_STAGES];
+}
+
+export function criterionLabel(rubric: Rubric | null | undefined, id: string) {
+  const hit = rubric?.criteria?.find((c) => c.id === id);
+  return hit?.name || id;
 }
